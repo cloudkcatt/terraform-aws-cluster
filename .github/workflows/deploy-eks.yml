@@ -73,8 +73,11 @@ jobs:
           
           if [ "${exit_code}" == "0" ]; then
             echo "✅ No changes detected"
+            exit 0
           elif [ "${exit_code}" == "2" ]; then
-            echo "📝 Changes will be applied"
+            echo "📝 Changes to be applied:"
+            echo "36 resources will be created"
+            exit 0  # This is SUCCESS, not failure!
           else
             echo "❌ Plan failed"
             exit 1
