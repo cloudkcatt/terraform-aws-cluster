@@ -1,5 +1,3 @@
-# terraform/modules/eks-addons/main.tf
-
 # Wait for the cluster to be ready
 resource "time_sleep" "wait_for_cluster" {
   create_duration = "30s"

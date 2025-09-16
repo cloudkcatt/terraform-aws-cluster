@@ -1,5 +1,3 @@
-# terraform/modules/networking/main.tf
-
 # Data source for availability zones
 data "aws_availability_zones" "available" {
   state = "available"

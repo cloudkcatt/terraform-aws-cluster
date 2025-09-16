@@ -1,5 +1,3 @@
-# terraform/modules/eks-cluster/outputs.tf
-
 output "cluster_id" {
   description = "EKS cluster ID"
   value       = aws_eks_cluster.main.id

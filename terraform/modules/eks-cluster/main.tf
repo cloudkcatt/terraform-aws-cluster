@@ -1,5 +1,3 @@
-# terraform/modules/eks-cluster/main.tf
-
 # EKS Cluster
 resource "aws_eks_cluster" "main" {
   name     = var.cluster_name

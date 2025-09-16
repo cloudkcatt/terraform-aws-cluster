@@ -1,5 +1,3 @@
-# terraform/environments/sandbox/main.tf
-
 locals {
   common_tags = {
     Environment = var.environment
