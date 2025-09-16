@@ -1,0 +1,19 @@
+gitignore# Terraform files
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terraform.lock.hcl
+terraform.tfplan
+tfplan
+*.backup
+
+# Credentials
+*.pem
+*.key
+github-secrets.txt
+
+# OS files
+.DS_Store
+*.swp

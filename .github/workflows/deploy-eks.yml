@@ -1,0 +1,207 @@
+name: Deploy EKS Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Choose action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      confirm_destroy:
+        description: 'Type "yes" to confirm destroy (only for destroy action)'
+        required: false
+        default: 'no'
+
+env:
+  TF_VERSION: '1.5.7'
+  AWS_REGION: 'us-west-2'
+  TF_WORKING_DIR: './terraform/environments/sandbox'
+
+jobs:
+  terraform:
+    name: Terraform ${{ github.event.inputs.action }}
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Destroy Confirmation
+        if: github.event.inputs.action == 'destroy' && github.event.inputs.confirm_destroy != 'yes'
+        run: |
+          echo "❌ Destroy action requires confirmation!"
+          echo "Please type 'yes' in the confirmation field to destroy infrastructure."
+          exit 1
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=eks/sandbox/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_LOCK_TABLE }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        if: github.event.inputs.action == 'plan'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "📋 Running Terraform Plan..."
+          terraform plan -detailed-exitcode || exit_code=$?
+          
+          if [ "${exit_code}" == "0" ]; then
+            echo "✅ No changes detected"
+          elif [ "${exit_code}" == "2" ]; then
+            echo "📝 Changes will be applied"
+          else
+            echo "❌ Plan failed"
+            exit 1
+          fi
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "🚀 Deploying EKS Infrastructure..."
+          terraform apply -auto-approve
+          echo "✅ Infrastructure deployed successfully!"
+          
+          # Show outputs
+          echo ""
+          echo "📝 Important Outputs:"
+          echo "===================================="
+          terraform output configure_kubectl
+          echo "===================================="
+
+      - name: Clean Kubernetes Resources
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          echo "🧹 Cleaning up Kubernetes resources..."
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ secrets.CLUSTER_NAME }} 2>/dev/null || true
+          
+          # Delete LoadBalancer services
+          kubectl get svc --all-namespaces -o json 2>/dev/null | \
+            jq -r '.items[] | select(.spec.type=="LoadBalancer") | "\(.metadata.namespace)/\(.metadata.name)"' | \
+            while read svc; do
+              if [ -n "$svc" ]; then
+                ns=$(echo $svc | cut -d'/' -f1)
+                name=$(echo $svc | cut -d'/' -f2)
+                echo "Deleting LoadBalancer: $ns/$name"
+                kubectl delete svc -n $ns $name --timeout=60s 2>/dev/null || true
+              fi
+            done
+          
+          # Wait for AWS resources to be cleaned
+          echo "⏳ Waiting for AWS resources to be cleaned up..."
+          sleep 30
+
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "💥 Destroying EKS Infrastructure..."
+          terraform destroy -auto-approve
+          echo "✅ Infrastructure destroyed successfully!"
+
+  deploy-ingress:
+    name: Deploy AWS Load Balancer Controller
+    needs: terraform
+    if: github.event.inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl and helm
+        run: |
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          # Install helm
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ secrets.CLUSTER_NAME }}
+          kubectl get nodes
+
+      - name: Install AWS Load Balancer Controller
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "📦 Installing AWS Load Balancer Controller..."
+          
+          # Get the IAM role ARN from Terraform outputs
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=eks/sandbox/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_LOCK_TABLE }}"
+          
+          ROLE_ARN=$(terraform output -raw aws_lb_controller_role_arn)
+          echo "Using IAM Role: $ROLE_ARN"
+          
+          # Create service account
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: aws-load-balancer-controller
+            namespace: kube-system
+            annotations:
+              eks.amazonaws.com/role-arn: ${ROLE_ARN}
+          EOF
+          
+          # Add helm repo and install
+          helm repo add eks https://aws.github.io/eks-charts
+          helm repo update
+          
+          helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+            -n kube-system \
+            --set clusterName=${{ secrets.CLUSTER_NAME }} \
+            --set serviceAccount.create=false \
+            --set serviceAccount.name=aws-load-balancer-controller \
+            --wait
+          
+          echo "✅ AWS Load Balancer Controller installed successfully!"
+          echo ""
+          echo "📝 You can now create Ingress resources to expose your applications:"
+          echo "======================================"
+          echo "apiVersion: networking.k8s.io/v1"
+          echo "kind: Ingress"
+          echo "metadata:"
+          echo "  annotations:"
+          echo "    kubernetes.io/ingress.class: alb"
+          echo "    alb.ingress.kubernetes.io/scheme: internet-facing"
+          echo "======================================"
