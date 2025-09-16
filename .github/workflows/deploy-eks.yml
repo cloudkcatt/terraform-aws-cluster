@@ -69,19 +69,8 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           echo "📋 Running Terraform Plan..."
-          terraform plan -detailed-exitcode || exit_code=$?
-          
-          if [ "${exit_code}" == "0" ]; then
-            echo "✅ No changes detected"
-            exit 0
-          elif [ "${exit_code}" == "2" ]; then
-            echo "📝 Changes to be applied:"
-            echo "36 resources will be created"
-            exit 0  # This is SUCCESS, not failure!
-          else
-            echo "❌ Plan failed"
-            exit 1
-          fi
+          terraform plan
+          echo "✅ Plan completed successfully!"
 
       - name: Terraform Apply
         if: github.event.inputs.action == 'apply'
