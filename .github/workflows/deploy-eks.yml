@@ -20,7 +20,7 @@ on:
 env:
   TF_VERSION: '1.5.7'
   AWS_REGION: 'us-west-2'
-  TF_WORKING_DIR: './terraform/environments/sandbox'
+  TF_WORKING_DIR: '.'
 
 jobs:
   terraform:
