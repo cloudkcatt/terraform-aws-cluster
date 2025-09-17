@@ -35,7 +35,7 @@ jobs:
         if: github.event.inputs.action == 'destroy' && github.event.inputs.confirm_destroy != 'yes'
         run: |
           echo "❌ Destroy action requires confirmation!"
-          echo "Please type 'yes' in the confirmation field to destroy infrastructure."
+          echo "Please type 'yes' in the confirmation field to destroy infra."
           exit 1
 
       - name: Configure AWS Credentials
