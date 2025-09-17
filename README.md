@@ -1,4 +1,4 @@
-# EKS Terraform Setup
+## EKS Terraform Setup
 
 ## Prerequisites
 
@@ -10,6 +10,3 @@
    - `TF_STATE_BUCKET`
    - `TF_STATE_LOCK_TABLE`
    - `CLUSTER_NAME`
-
-# Configure kubectl
-aws eks update-kubeconfig --region us-west-2 --name eks-cluster
